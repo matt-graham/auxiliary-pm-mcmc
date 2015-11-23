@@ -222,9 +222,7 @@ class LogMarginalLikelihoodApproxPosteriorISEstimator(object):
         # generate samples from latent function approximate posterior
         f_s = f_post[None] + C_chol.dot(ns).T
         # calculate log density of latent function samples under GP prior
-        f_s_K_inv_f_s = np.empty(n_imp_sample)
-        for i in range(n_imp_sample):
-            f_s_K_inv_f_s[i] = la.cho_solve((K_chol, True), f_s[i]).dot(f_s[i])
+        f_s_K_inv_f_s = (la.cho_solve((K_chol, True), f_s.T) * f_s.T).sum(0)
         log_p_f_s_gvn_theta = (-0.5 * f_s_K_inv_f_s -
                                np.log(K_chol.diagonal()).sum())
         # calculate log likelihood of latent function samples given observed y
@@ -232,10 +230,8 @@ class LogMarginalLikelihoodApproxPosteriorISEstimator(object):
         # calculate log density of latent function samples under approximate
         # Gaussian posterior importance sampling distribution
         f_s_zm = f_s - f_post[None]
-        f_s_zm_C_inv_f_s_zm = np.empty(n_imp_sample)
-        for i in range(n_imp_sample):
-            f_s_zm_C_inv_f_s_zm[i] = la.cho_solve(
-                (C_chol, True), f_s_zm[i]).dot(f_s_zm[i])
+        f_s_zm_C_inv_f_s_zm = (
+            la.cho_solve((C_chol, True), f_s_zm.T) * f_s_zm.T).sum(0)
         log_q_f_s_gvn_y_theta = (-0.5 * f_s_zm_C_inv_f_s_zm -
                                  np.log(C_chol.diagonal()).sum())
         # calculate log marginal likelihood estimate for each importance sample
