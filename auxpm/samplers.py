@@ -343,16 +343,19 @@ class APMMetIndPlusMHSampler(BaseAdaptiveMHSampler):
         self.u_sampler = u_sampler
         self.prng = prng
 
-    def get_samples(self, theta_init, n_sample):
+    def get_samples(self, theta_init, n_sample, u_init=None):
         """ Perform a series of Markov chain updates.
 
         Parameters
         ----------
         theta_init : ndarray
-            State to initialise chain at, with shape ``(n_dim, )``.
+            State to initialise parameters at, with shape ``(n_dim, )``.
         n_sample : integer
             Number of Markov chain updates to perform and so state samples to
             return.
+        u_init : ndarray
+            State to initialise random draws at. Optional, if not specified
+            will be sampled from base density.
 
         Returns
         -------
@@ -371,7 +374,7 @@ class APMMetIndPlusMHSampler(BaseAdaptiveMHSampler):
         else:
             thetas = np.empty(n_sample)
         thetas[0] = theta_init
-        u = self.u_sampler()
+        u = u_init if not u_init is None else self.u_sampler()
         log_f_est_curr, cached_res_curr = self.log_f_estimator(u, theta_init)
         n_reject_1 = 0
         n_reject_2 = 0
@@ -512,16 +515,19 @@ class APMEllSSPlusMHSampler(BaseAdaptiveMHSampler):
         return mcmc.elliptical_slice_step(u, log_f_est, log_f_func, self.prng,
                                           v, self.max_slice_iters)
 
-    def get_samples(self, theta_init, n_sample):
+    def get_samples(self, theta_init, n_sample, u_init=None):
         """ Perform a series of Markov chain updates.
 
         Parameters
         ----------
         theta_init : ndarray
-            State to initialise chain at, with shape ``(n_dim, )``.
+            State to initialise parameters at, with shape ``(n_dim, )``.
         n_sample : integer
             Number of Markov chain updates to perform and so state samples to
             return.
+        u_init : ndarray
+            State to initialise random draws at. Optional, if not specified
+            will be sampled from base density.
 
         Returns
         -------
@@ -537,7 +543,7 @@ class APMEllSSPlusMHSampler(BaseAdaptiveMHSampler):
         else:
             thetas = np.empty(n_sample)
         thetas[0] = theta_init
-        u = self.u_sampler()
+        u = u_init if u_init is not None else self.u_sampler()
         log_f_est_curr, self._cached_res_curr = (
             self.log_f_estimator(u, theta_init))
         n_reject = 0
@@ -652,16 +658,19 @@ class BaseAPMMetIndPlusSliceSampler(object):
         """
         raise NotImplementedError()
 
-    def get_samples(self, theta_init, n_sample):
+    def get_samples(self, theta_init, n_sample, u_init=None):
         """ Perform a series of Markov chain updates.
 
         Parameters
         ----------
         theta_init : ndarray
-            State to initialise chain at, with shape ``(n_dim, )``.
+            State to initialise parameters at, with shape ``(n_dim, )``.
         n_sample : integer
             Number of Markov chain updates to perform and so state samples to
             return.
+        u_init : ndarray
+            State to initialise random draws at. Optional, if not specified
+            will be sampled from base density.
 
         Returns
         -------
@@ -677,7 +686,7 @@ class BaseAPMMetIndPlusSliceSampler(object):
         else:
             thetas = np.empty((n_sample, 1))
         thetas[0] = theta_init
-        u = self.u_sampler()
+        u = u_init if u_init is not None else self.u_sampler()
         log_f_est_curr, self._cached_res_curr = (
             self.log_f_estimator(u, theta_init))
         n_reject = 0
@@ -788,16 +797,19 @@ class BaseAPMEllSSPlusSliceSampler(object):
         """
         raise NotImplementedError()
 
-    def get_samples(self, theta_init, n_sample):
+    def get_samples(self, theta_init, n_sample, u_init=None):
         """ Perform a series of Markov chain updates.
 
         Parameters
         ----------
         theta_init : ndarray
-            State to initialise chain at, with shape ``(n_dim, )``.
+            State to initialise parameters at, with shape ``(n_dim, )``.
         n_sample : integer
             Number of Markov chain updates to perform and so state samples to
             return.
+        u_init : ndarray
+            State to initialise random draws at. Optional, if not specified
+            will be sampled from base density.
 
         Returns
         -------
@@ -810,7 +822,7 @@ class BaseAPMEllSSPlusSliceSampler(object):
         else:
             thetas = np.empty((n_sample, 1))
         thetas[0] = theta_init
-        u = self.u_sampler()
+        u = u_init if u_init is not None else self.u_sampler()
         log_f_est_curr, self._cached_res_curr = (
             self.log_f_estimator(u, theta_init))
         for s in range(1, n_sample):
