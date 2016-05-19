@@ -1087,3 +1087,79 @@ class APMEllSSPlusRandDirSliceSampler(BaseAPMEllSSPlusSliceSampler):
 
         x_new, log_f_est = self.slice_step(0., log_f_est, log_f_func, w)
         return theta + x_new * d, log_f_est
+
+
+class APMEllSSPlusEllSSSampler(BaseAPMEllSSPlusSliceSampler):
+    """ Auxiliary pseudo-marginal ESS + ESS sampler.
+
+    Sampler in the auxiliary pseudo-marginal MCMC framework which uses
+    elliptical slice sampling updates for both the random draws and parameter
+    states.
+
+    It is implicitly assumed the prior :math:`q(u)` on the random draws and
+    the prior on the parameters :math:`p(\\theta)` are both Gaussian.
+    """
+
+    def __init__(self, log_f_estimator, u_sampler, theta_sampler, prng,
+                 max_slice_iters=1000):
+        """ Auxiliary pseudo-marginal ESS + ESS sampler.
+
+        Parameters
+        ----------
+        log_f_estimator : function or callable object
+            Function which returns an unbiased estimate of the log density
+            of the target likelihood (i.e. without Gaussian prior on parameter
+            state) given current parameter state and random draws. Should have
+            a call signature::
+                log_f_est, cached_res_out =
+                    log_f_estimator(u, theta, [, cached_res_in])
+            where ``u`` is the vector of auxiliary random draws used in the
+            density estimator, ``theta`` is the state vector (as ndarray) to
+            estimate the density at, ``cached_res_in`` is an optional input
+            which can be provided if cached intermediate results
+            deterministically calculated from the ``theta`` which it is wished
+            to estimate the density at have been stored from a previous call,
+            potentially speeding subsequent estimates, ``log_f_est`` is the
+            calculated log-density estimate and ``cached_res_out`` are
+            intermediate cached results determinstically calculated from
+            the specified ``theta`` which can be used in subsequent calls to
+            potentially speed further estimates of the log density for this
+            ``theta`` value (if ``cached_res_in`` was specified then
+            ``cached_res_out == cached_res_in``).
+        u_sampler : function or callable object
+            Function which returns an independent sample from the Gaussian
+            prior distribution on the random draws :math:`q(u)`.
+        theta_sampler : function or callable object
+            Function which returns an independent sample from the Gaussian
+            prior distribution on the parameters :math:`p(\\theta)`.
+        prng : RandomState
+            Pseudo-random number generator object (either an instance of a
+            ``numpy`` ``RandomState`` or an object with an equivalent
+            interface) used to randomly sample accept decisions in MH accept
+            step.
+        max_slice_iters : integer
+            Maximum number of slice shrinking iterations to perform.
+        """
+        super(APMEllSSPlusEllSSSampler, self).__init__(
+            log_f_estimator, u_sampler, prng, None, max_slice_iters)
+        self.theta_sampler = theta_sampler
+
+    def slice_sample_theta_gvn_u(self, theta, log_f_est, u):
+        """ Perform ESS on conditional density of state given random draws.
+
+        Performs elliptical slice sampling on conditional target
+        density of parameter state given auxiliary random draw variables.
+        """
+
+        def log_f_func(theta):
+            # keep saving cached results from new estimator evaluations
+            # final call of log_f_func in slice sampling routine will
+            # always be accepted update so cached results will be correct
+            log_f_est_, self._cached_res_curr = (
+                self.log_f_estimator(u, theta)
+            )
+            return log_f_est_
+
+        v = self.theta_sampler()
+        return mcmc.elliptical_slice_step(
+            theta, log_f_est, log_f_func, self.prng, v, self.max_slice_iters)
