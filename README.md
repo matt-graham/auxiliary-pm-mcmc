@@ -6,6 +6,8 @@ framework as described in the paper
 associated code for running Gaussian process classification model parameter
 inference experiments.
 
+A simpler single module Python implementation written by Iain Murray is also available [here](https://github.com/imurray/pmslice-python).
+
 ## Requirements
 
 The code has only been tested in 
