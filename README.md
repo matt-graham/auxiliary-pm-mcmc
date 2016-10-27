@@ -6,7 +6,7 @@ framework as described in the paper
 associated code for running Gaussian process classification model parameter
 inference experiments.
 
-A simpler single module Python implementation written by Iain Murray is also available [here](https://github.com/imurray/pmslice-python).
+A simpler single module Python implementation written by Iain Murray is also available [here](https://github.com/imurray/pmslice-python) - this is probably the simplest option for applying the method to your own problem.
 
 ## Requirements
 
@@ -70,12 +70,6 @@ The code is organised in to three main sub-directories:
     A series of IPython notebooks using the above two packages to run
     Gaussian process classification parameter inference experiments for
     different sampling methods and analyse results.
-    
-All the functions and classes in the provided modules have documented interfaces
-(the numpy-type docstrings, including mathematical notation will be rendered 
-as rich-text in the object-inspector of 
-[Spyder](https://github.com/spyder-ide/spyder), a scientific Python development 
-environment).
 
 ## Running experiment notebooks
 
