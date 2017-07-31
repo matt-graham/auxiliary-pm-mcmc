@@ -4,10 +4,6 @@ Setup script for auxiliary pseudo-marginal MCMC python implementations and
 Gaussian process classification parameter inference experiments.
 """
 
-__authors__ = 'Matt Graham'
-__copyright__ = 'Copyright 2015, Matt Graham'
-__license__ = 'MIT'
-
 from distutils.core import setup
 from distutils.extension import Extension
 import argparse

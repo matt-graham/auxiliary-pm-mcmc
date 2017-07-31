@@ -4,10 +4,6 @@ Helper functions for auxiliary pseudo marginal MCMC Gaussian process
 classification experiments.
 """
 
-__authors__ = 'Matt Graham'
-__copyright__ = 'Copyright 2015, Matt Graham'
-__license__ = 'MIT'
-
 import os
 import datetime
 import json
@@ -57,30 +53,6 @@ def log_gamma_log_pdf(x, a, b):
         Log density.
     """
     return a * np.log(b) - gammaln(a) + a * x - b * np.exp(x)
-
-
-def adapt_factor_func(b, n_batch):
-    """ Calculates adaption factor to use during an adaptive MH run.
-
-    Based on adaption schedule used in code accompanying paper:
-
-    `Pseudo-Marginal Bayesian Inference for Gaussian Processes`,
-    Filippone and Girolami (2013)
-
-    Parameters
-    ----------
-    b : integer
-         Index of current batch of updates (each batch of updates being
-         used to calculate an average accept rate).
-    n_batch : integer
-         Total number batches to be used in full adaptive run.
-
-    Returns
-    -------
-    adapt_factor : double
-         Factor to use to scale changes in adapation of proposal parameters.
-    """
-    return 5. - min(b + 1, n_batch / 5.) / (n_batch / 5.) * 3.9
 
 
 def normalise_inputs(X):

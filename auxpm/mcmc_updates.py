@@ -3,10 +3,6 @@
 Standard Markov Chain Monte Carlo updates.
 """
 
-__authors__ = 'Matt Graham'
-__copyright__ = 'Copyright 2015, Matt Graham'
-__license__ = 'MIT'
-
 import numpy as np
 import warnings
 
@@ -67,13 +63,16 @@ def metropolis_step(x_curr, log_f_curr, log_f_func, prng, prop_sampler,
         Logarithm of target density at updated state.
     rejection : boolean
         Whether the proposed update was rejected (True) or accepted (False).
+    accept_prob : float
+        Accept probability of proposed move.
     """
     x_prop = prop_sampler(x_curr, prop_scales)
     log_f_prop = log_f_func(x_prop)
-    if prng.uniform() < np.exp(log_f_prop - log_f_curr):
-        return x_prop, log_f_prop, False
+    accept_prob = min(1., np.exp(log_f_prop - log_f_curr))
+    if prng.uniform() < accept_prob:
+        return x_prop, log_f_prop, False, accept_prob
     else:
-        return x_curr, log_f_curr, True
+        return x_curr, log_f_curr, True, accept_prob
 
 
 def met_hastings_step(x_curr, log_f_curr, log_f_func, prng, prop_sampler,
@@ -143,17 +142,21 @@ def met_hastings_step(x_curr, log_f_curr, log_f_func, prng, prop_sampler,
         Logarithm of target density at updated state.
     rejection : boolean
         Whether the proposed update was rejected (True) or accepted (False).
+    accept_prob : float
+        Accept probability of proposed move.
     """
     x_prop = prop_sampler(x_curr, prop_params)
     log_f_prop = log_f_func(x_prop)
     log_prop_dens_fwd = log_prop_density(x_prop, x_curr, prop_params)
     log_prop_dens_bwd = log_prop_density(x_curr, x_prop, prop_params)
-    accept_prob = np.exp(log_f_prop + log_prop_dens_bwd -
-                         log_f_curr - log_prop_dens_fwd)
+    accept_prob = min(
+        1., np.exp(log_f_prop + log_prop_dens_bwd -
+                   log_f_curr - log_prop_dens_fwd)
+    )
     if prng.uniform() < accept_prob:
-        return x_prop, log_f_prop, False
+        return x_prop, log_f_prop, False, accept_prob
     else:
-        return x_curr, log_f_curr, True
+        return x_curr, log_f_curr, True, accept_prob
 
 
 def metropolis_indepedence_step(x_curr, log_f_curr, log_f_func, prng,
@@ -280,6 +283,8 @@ def metropolis_indepedence_step(x_curr, log_f_curr, log_f_func, prng,
         Logarithm of target density at updated state.
     rejection : boolean
         Whether the proposed update was rejected (True) or accepted (False).
+    accept_prob : float
+        Accept probability of proposed move.
     """
     if prop_params:
         x_prop = prop_sampler(prop_params)
@@ -293,14 +298,16 @@ def metropolis_indepedence_step(x_curr, log_f_curr, log_f_func, prng,
         else:
             log_prop_dens_fwd = log_prop_density(x_prop)
             log_prop_dens_bwd = log_prop_density(x_curr)
-        accept_prob = np.exp(log_f_prop + log_prop_dens_bwd -
-                             log_f_curr - log_prop_dens_fwd)
+        accept_prob = min(
+            1., np.exp(log_f_prop + log_prop_dens_bwd -
+                       log_f_curr - log_prop_dens_fwd)
+        )
     else:
-        accept_prob = np.exp(log_f_prop - log_f_curr)
+        accept_prob = min(1., np.exp(log_f_prop - log_f_curr))
     if prng.uniform() < accept_prob:
-        return x_prop, log_f_prop, False
+        return x_prop, log_f_prop, False, accept_prob
     else:
-        return x_curr, log_f_curr, True
+        return x_curr, log_f_curr, True, accept_prob
 
 
 class MaximumIterationsExceededError(Exception):

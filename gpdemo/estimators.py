@@ -5,9 +5,6 @@ process classification model (with probit likelihood) for use in
 pseudo-marginal MCMC samplers.
 """
 
-__authors__ = 'Matt Graham'
-__copyright__ = 'Copyright 2015, Matt Graham'
-__license__ = 'MIT'
 
 import numpy as np
 import scipy.linalg as la

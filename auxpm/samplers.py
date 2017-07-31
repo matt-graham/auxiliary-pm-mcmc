@@ -3,12 +3,32 @@
 Auxiliary Pseudo-Marginal Markov chain Monte Carlo samplers
 """
 
-__authors__ = 'Matt Graham'
-__copyright__ = 'Copyright 2015, Matt Graham'
-__license__ = 'MIT'
-
 import numpy as np
 import mcmc_updates as mcmc
+
+
+def adapt_factor_func(b, n_batch):
+    """ Calculates adaption factor to use during an adaptive MH run.
+
+    Based on adaption schedule used in code accompanying paper:
+
+    `Pseudo-Marginal Bayesian Inference for Gaussian Processes`,
+    Filippone and Girolami (2013)
+
+    Parameters
+    ----------
+    b : integer
+         Index of current batch of updates (each batch of updates being
+         used to calculate an average accept rate).
+    n_batch : integer
+         Total number batches to be used in full adaptive run.
+
+    Returns
+    -------
+    adapt_factor : double
+         Factor to use to scale changes in adapation of proposal parameters.
+    """
+    return 5. - min(b + 1, n_batch / 5.) / (n_batch / 5.) * 3.9
 
 
 class BaseAdaptiveMHSampler(object):
@@ -54,19 +74,18 @@ class BaseAdaptiveMHSampler(object):
         thetas : ndarray
             Two dimensional array of sampled chain states with shape
             ``(n_sample, n_dim)``.
-        n_reject : integer or iterable
-             For a Markov chain in which each state update contains only one
-             Metropolis(-Hastings) accept step this is the number of rejected
-             proposed updates during the ``n_sample`` updates. If each update
-             contains multiple Metropolis(-Hastings) accept steps this is an
-             iterable with each element corresponding to the rejection count
-             for a particular accept step in the order they are performed in
-             the overall update.
+        chain_stats : dict
+             Dictionary of chain statistics, which needs to include a
+             ``av_accept_adapt`` entry correspond to mean accept probability of
+             Metropolis-Hastings updates controlled by adaptive step sizes
+             determined by ``prop_scales`` property. This value is used as
+             the control signal for adaptation.
         """
         raise NotImplementedError()
 
     def adaptive_run(self, theta_init, batch_size, n_batch,
-                     low_acc_thr, upp_acc_thr, adapt_factor_func,
+                     low_acc_thr=0.15, upp_acc_thr=0.3,
+                     adapt_factor_func=adapt_factor_func,
                      print_details=False, reject_count_index=-1,):
         """ Run MH Markov chain with proposal tuning to adapt acceptance rate.
 
@@ -81,7 +100,7 @@ class BaseAdaptiveMHSampler(object):
         Parameters
         ----------
         theta_init : ndarray
-            State to start running chain from.
+            Values to initial target variables state at.
         batch_size : integer
             Number of samples (Markov chain updates) to compute for each batch.
         n_batch : integer
@@ -108,22 +127,12 @@ class BaseAdaptiveMHSampler(object):
         print_details : boolean
             Whether to print accept rate and adaption factor for each batch
             to standard out during a run.
-        reject_count_index : integer
-            Optional argument specifying index of which rejection count to use
-            as adaption signal when ``get_samples`` method returns an iterable
-            of rejection counts as its second argument, for example when
-            each overall Markov chain update between successive sample is
-            composed of several Metropolis(-Hastings) steps each with their
-            own possibility of rejecting. The index specified should
-            correspond to the rejection count of the MH step of which the
-            proposal distribution is parameterised by the ``prop_scales``
-            parameters for the adaptive run to make any sense.
 
         Returns
         -------
         thetas : ndarray
-            Array of states sampled during all batches of adaptive run, of
-            shape ``(n_batch * n_size, n_dim)``.
+            Array of target_variables sampled during all batches of adaptive
+            run, of shape ``(n_batch * n_size, n_dim)``.
         prop_scales : ndarray
             Array of proposal scales after each batch of adaptive run, of
             shape ``(n_batch, n_dim)``.
@@ -135,14 +144,9 @@ class BaseAdaptiveMHSampler(object):
         prop_scales = np.empty((n_batch, self.prop_scales.shape[0]))
         accept_rates = np.empty(n_batch)
         for b in range(n_batch):
-            thetas[b*batch_size:(b+1)*batch_size], n_reject = (
+            thetas[b*batch_size:(b+1)*batch_size], chain_stats = (
                 self.get_samples(theta_init, batch_size))
-            # if multiple rejection counts present e.g. from multiple
-            # Metropolis(-Hastings) accept steps during one overall update
-            # for different parts of state, adapt only using last
-            if hasattr(n_reject, '__len__') and reject_count_index:
-                n_reject = n_reject[reject_count_index]
-            accept_rates[b] = 1. - (n_reject * 1. / batch_size)
+            accept_rates[b] = chain_stats['av_accept_adapt']
             theta_init = thetas[(b + 1) * batch_size - 1]
             adapt_factor = adapt_factor_func(b, n_batch)
             if accept_rates[b] < low_acc_thr:
@@ -151,8 +155,9 @@ class BaseAdaptiveMHSampler(object):
                 self.prop_scales *= adapt_factor
             prop_scales[b] = self.prop_scales
             if print_details:
-                print('Batch {0}: accept rate {1}, adapt factor {2}'
-                      .format(b + 1, accept_rates[b], adapt_factor))
+                print('Batch {0}: accept rate {1}, adapt factor {2}, '
+                      'prop_scales {3}'.format(b + 1, accept_rates[b],
+                                               adapt_factor, prop_scales))
         return thetas, prop_scales, accept_rates
 
 
@@ -175,25 +180,25 @@ class PMMHSampler(BaseAdaptiveMHSampler):
             of the target distribution given current parameter state. Should
             have a call signature::
                 log_f_est = log_f_estimator(theta)
-            where ``theta`` is state vector (as ndarray) to evaluate density
-            at and log_f_est is the returned double log-density estimate.
+            where ``theta`` is the target variables to evaluate density
+            at and log_f_est is the returned log-density estimate.
         log_prop_density : function or callable object or None
             Function returning logarithm of parameter update proposal density
             at a given proposed parameter state given the current parameter
             state. Should have a call signature::
                 log_prop_dens = log_prop_density(theta_prop, theta_curr)
-            where ``theta_prop`` is proposed parameter state to evaluate the
-            log proposal density at, ``theta_curr`` is the parameter state to
+            where ``theta_prop`` is proposed target variables to evaluate the
+            log proposal density at, ``theta_curr`` is the target variables to
             condition the proposal density on and ``log_prop_dens`` is the
             returned log proposal density value. Alternatively ``None`` may
             be passed which indicates a symmetric proposal density in which
             case a Metropolis update will be made.
         prop_sampler : function or callable object
-            Function which returns a proposed new parameter state drawn from
-            proposal distribution given a current parameter state. Should have
+            Function which returns a proposed new target variables drawn from
+            proposal distribution given a current target variables. Should have
             a call signature::
                 theta_prop = prop_sampler(theta_curr, prop_scales)
-            where ``theta_curr`` is the current parameter state vector (as a
+            where ``theta_curr`` is the current target variables vector (as a
             ndarray) which the proposal should be conditioned on,
             ``prop_scales`` is a ndarray of scale parameters for the proposal
             distribution (e.g. standard deviation for Gaussian proposals) and
@@ -234,11 +239,13 @@ class PMMHSampler(BaseAdaptiveMHSampler):
         Returns
         -------
         thetas : ndarray
-            Two dimensional array of sampled chain states with shape
+            Two dimensional array of sampled target variables with shape
             ``(n_sample, n_dim)``.
-        n_reject : integer
-             The number of rejected proposed updates during the ``n_sample``
-             updates.
+        chain_stats : dict
+            Dictionary containing chain statistics:
+                n_reject: The number of rejected proposed updates.
+                av_accept: The mean accept probability of proposed updates.
+                av_accept_adapt: Alias of above for adaptation implementation.
         """
         if hasattr(theta_init, 'shape'):
             thetas = np.empty((n_sample, theta_init.shape[0]))
@@ -247,27 +254,37 @@ class PMMHSampler(BaseAdaptiveMHSampler):
         thetas[0] = theta_init
         log_f_est_curr = self.log_f_estimator(theta_init)
         n_reject = 0
+        av_accept = 0
         for s in range(1, n_sample):
             if self.do_metropolis_update:
-                thetas[s], log_f_est_curr, rejection = mcmc.metropolis_step(
-                    thetas[s-1], log_f_est_curr, self.log_f_estimator,
-                    self.prng, self.prop_sampler, self.prop_scales)
+                thetas[s], log_f_est_curr, rejection, accept_prob = (
+                    mcmc.metropolis_step(
+                        thetas[s-1], log_f_est_curr, self.log_f_estimator,
+                        self.prng, self.prop_sampler, self.prop_scales)
+                )
             else:
-                thetas[s], log_f_est_curr, rejection = mcmc.met_hastings_step(
-                    thetas[s-1], log_f_est_curr, self.log_f_estimator,
-                    self.prng, self.prop_sampler, self.prop_scales,
-                    self.log_prop_density)
+                thetas[s], log_f_est_curr, rejection, accept_prob = (
+                    mcmc.met_hastings_step(
+                        thetas[s-1], log_f_est_curr, self.log_f_estimator,
+                        self.prng, self.prop_sampler, self.prop_scales,
+                        self.log_prop_density)
+                    )
             if rejection:
                 n_reject += 1
-        return thetas, n_reject
+            av_accept += accept_prob
+        av_accept /= (n_sample - 1)
+        return thetas, {
+            'n_reject': n_reject, 'av_accept': av_accept,
+            'av_accept_adapt': av_accept
+        }
 
 
 class APMMetIndPlusMHSampler(BaseAdaptiveMHSampler):
     """ Auxiliary pseudo-marginal MI + MH sampler.
 
     Sampler in the auxiliary pseudo-marginal MCMC framework which uses
-    Metropolis independence updates for the random draws and Metropolis--
-    Hastings updates for the parameter state.
+    Metropolis independence updates for the auxiliary variables and
+    Metropolis-Hastings updates for the target variables.
     """
 
     def __init__(self, log_f_estimator, log_prop_density, prop_sampler,
@@ -278,12 +295,12 @@ class APMMetIndPlusMHSampler(BaseAdaptiveMHSampler):
         ----------
         log_f_estimator : function or callable object
             Function which returns an unbiased estimate of the log density
-            of the target distribution given current parameter state and
-            random draws. Should have a call signature::
+            of the target distribution given current target variables and
+            auxiliary variables. Should have a call signature::
                 log_f_est, cached_res_out =
                     log_f_estimator(u, theta, [, cached_res_in])
-            where ``u`` is the vector of auxiliary random draws used in the
-            density estimator, ``theta`` is the state vector (as ndarray) to
+            where ``u`` is the vector of auxiliary variables used in the
+            density estimator, ``theta`` is the target variables to
             estimate the density at, ``cached_res_in`` is an optional input
             which can be provided if cached intermediate results
             deterministically calculated from the ``theta`` which it is wished
@@ -323,8 +340,8 @@ class APMMetIndPlusMHSampler(BaseAdaptiveMHSampler):
             by calling ``adaptive_run``, these parameters will be tuned to
             try to achieve an average accept rate in some prescribed interval.
         u_sampler : function or callable object
-            Function which returns an independent sample from the 'prior'
-            distribution on the random draws :math:`q(u)`.
+            Function which returns an independent sample from the marginal
+            distribution on the auxiliary variables :math:`q(u)`.
         prng : RandomState
             Pseudo-random number generator object (either an instance of a
             ``numpy`` ``RandomState`` or an object with an equivalent
@@ -349,73 +366,104 @@ class APMMetIndPlusMHSampler(BaseAdaptiveMHSampler):
         Parameters
         ----------
         theta_init : ndarray
-            State to initialise parameters at, with shape ``(n_dim, )``.
+            State to initialise target variables at, with shape ``(n_dim, )``.
         n_sample : integer
-            Number of Markov chain updates to perform and so state samples to
+            Number of Markov chain updates to perform and so samples to
             return.
         u_init : ndarray
-            State to initialise random draws at. Optional, if not specified
-            will be sampled from base density.
+            Initial values for auxiliary variables, shape ``(n_u_dim, )``.
+            Optional, if not specified will be sampled from marginal
+            distribution.
 
         Returns
         -------
         thetas : ndarray
-            Two dimensional array of sampled chain states with shape
+            Two dimensional array of sampled target variables with shape
             ``(n_sample, n_dim)``.
-        (n_reject_1, n_reject_2) : tuple
-             The number of rejected proposed updates during the ``n_sample``
-             updates, in the acceptance step for the random draw variable
-             given the current state parameter (``n_reject_1``) and in the
-             acceptance step for the state parameter given the current random
-             draws (``n_reject_2``).
+        us : ndarray
+            Two dimensional array of sampled auxiliary variables with shape
+            ``(n_sample, n_u_dim)``.
+        chain_stats : dict
+            Dictionary containing chain statistics:
+                n_reject_1: The number of rejected proposed auxiliary
+                    variables updates.
+                av_accept_1: The mean accept probability of the proposed
+                    auxiliary variable updates.
+                n_reject_2: The number of rejected proposed target
+                    variables updates.
+                av_accept_2: The mean accept probability of the proposed
+                    target variable updates.
+                av_accept_adapt: Alias of above for adaptation implementation.
         """
         if hasattr(theta_init, 'shape'):
-            thetas = np.empty((n_sample, theta_init.shape[0]))
+            thetas = np.empty((n_sample, theta_init.shape[0])) * np.nan
         else:
-            thetas = np.empty(n_sample)
+            thetas = np.empty(n_sample) * np.nan
         thetas[0] = theta_init
-        u = u_init if not u_init is None else self.u_sampler()
-        log_f_est_curr, cached_res_curr = self.log_f_estimator(u, theta_init)
+        u = u_init if u_init is not None else self.u_sampler()
+        us = np.empty((n_sample, u.shape[0])) * np.nan
+        us[0] = u
+        log_f_est_curr, cached_res_curr = self.log_f_estimator(
+            us[0], theta_init)
         n_reject_1 = 0
         n_reject_2 = 0
+        av_accept_1 = 0
+        av_accept_2 = 0
         for s in range(1, n_sample):
-            ## Update u keeping theta fixed using MI
+            # Update u keeping theta fixed using MI
             # As for this update only u will be changed, cached results
             # for current theta calculated in previous log_f_estimator call
             # can be reused, hence pass these values to estimator (with no
             # theta value being needed in this case) and use only first
             # return value (as second will be equal to cached_res_curr)
-            log_f_func_1 = lambda v: (
-                self.log_f_estimator(v, thetas[s-1], cached_res_curr)[0])
-            u, log_f_est_curr, rejection = mcmc.metropolis_indepedence_step(
-                u, log_f_est_curr, log_f_func_1, self.prng, self.u_sampler)
+            def log_f_func_1(v):
+                return self.log_f_estimator(
+                    v, thetas[s-1], cached_res_curr)[0]
+            us[s], log_f_est_curr, rejection, accept_prob = (
+                mcmc.metropolis_indepedence_step(
+                    us[s-1], log_f_est_curr, log_f_func_1, self.prng,
+                    self.u_sampler)
+            )
             if rejection:
                 n_reject_1 += 1
-            ## Update theta keeping u fixed using MH
+            av_accept_1 += accept_prob
 
+            # Update theta keeping u fixed using MH
             def log_f_func_2(theta):
                 # save cached results from estimator evaluation for proposed
                 # theta update so this can be saved to be used in
                 # final call of log_f_func in slice sampling routine will
                 # always be accepted update so cached results will be correct
                 log_f_est, self._cached_res_prop = (
-                    self.log_f_estimator(u, theta))
+                    self.log_f_estimator(us[s], theta))
                 return log_f_est
 
             if self.do_metropolis_update:
-                thetas[s], log_f_est_curr, rejection = mcmc.metropolis_step(
-                    thetas[s-1], log_f_est_curr, log_f_func_2, self.prng,
-                    self.prop_sampler, self.prop_scales)
+                thetas[s], log_f_est_curr, rejection, accept_prob = (
+                    mcmc.metropolis_step(
+                        thetas[s-1], log_f_est_curr, log_f_func_2, self.prng,
+                        self.prop_sampler, self.prop_scales)
+                )
             else:
-                thetas[s], log_f_est_curr, rejection = mcmc.met_hastings_step(
-                    thetas[s-1], log_f_est_curr, log_f_func_2, self.prng,
-                    self.prop_sampler, self.prop_scales, self.log_prop_density)
+                thetas[s], log_f_est_curr, rejection, accept_prob = (
+                    mcmc.met_hastings_step(
+                        thetas[s-1], log_f_est_curr, log_f_func_2, self.prng,
+                        self.prop_sampler, self.prop_scales,
+                        self.log_prop_density)
+                )
+            av_accept_2 += accept_prob
             if rejection:
                 n_reject_2 += 1
             else:
                 # if proposal accepted update current cached results
                 cached_res_curr = self._cached_res_prop
-        return thetas, (n_reject_1, n_reject_2)
+        av_accept_1 /= (n_sample - 1)
+        av_accept_2 /= (n_sample - 1)
+        return thetas, us, {
+            'n_reject_1': n_reject_1, 'n_reject_2': n_reject_2,
+            'av_accept_1': av_accept_1, 'av_accept_2': av_accept_2,
+            'av_accept_adapt': av_accept_2
+        }
 
 
 class APMEllSSPlusMHSampler(BaseAdaptiveMHSampler):
@@ -534,9 +582,16 @@ class APMEllSSPlusMHSampler(BaseAdaptiveMHSampler):
         thetas : ndarray
             Two dimensional array of sampled chain states with shape
             ``(n_sample, n_dim)``.
-        n_reject : integer or iterable
-             The number of rejected proposed updates during the ``n_sample``
-             updates.
+        us : ndarray
+            Two dimensional array of sampled auxiliary variables with shape
+            ``(n_sample, n_u_dim)``.
+        chain_stats : dict
+            Dictionary containing chain statistics:
+                n_reject: The number of rejected proposed target
+                    variables updates.
+                av_accept: The mean accept probability of the proposed
+                    target variable updates.
+                av_accept_adapt: Alias of above for adaptation implementation.
         """
         if hasattr(theta_init, 'shape'):
             thetas = np.empty((n_sample, theta_init.shape[0]))
@@ -544,45 +599,59 @@ class APMEllSSPlusMHSampler(BaseAdaptiveMHSampler):
             thetas = np.empty(n_sample)
         thetas[0] = theta_init
         u = u_init if u_init is not None else self.u_sampler()
+        us = np.empty((n_sample, u.shape[0])) * np.nan
+        us[0] = u
         log_f_est_curr, self._cached_res_curr = (
-            self.log_f_estimator(u, theta_init))
+            self.log_f_estimator(us[0], theta_init))
         n_reject = 0
+        av_accept = 0.
         for s in range(1, n_sample):
-            ## Update u keeping theta fixed using ell-SS
+            # Update u keeping theta fixed using ell-SS
             # As for this update only u will be changed, cached results
             # for current theta calculated in previous log_f_estimator call
             # can be reused, hence pass these values to estimator (with no
             # theta value being needed in this case) and use only first
             # return value (as second will be equal to cached_res_curr)
-            log_f_func_1 = lambda v: (
-                self.log_f_estimator(v, thetas[s-1], self._cached_res_curr)[0])
-            u, log_f_est_curr = self.elliptical_slice_sample_u_given_theta(
-                u, log_f_est_curr, log_f_func_1)
-            ## Update theta keeping u fixed using MH
+            def log_f_func_1(v):
+                return self.log_f_estimator(
+                    v, thetas[s-1], self._cached_res_curr)[0]
+            us[s], log_f_est_curr = self.elliptical_slice_sample_u_given_theta(
+                us[s-1], log_f_est_curr, log_f_func_1)
 
+            # Update theta keeping u fixed using MH
             def log_f_func_2(theta):
                 # save cached results from estimator evaluation for proposed
                 # theta update so this can be saved to be used in
                 # final call of log_f_func in slice sampling routine will
                 # always be accepted update so cached results will be correct
                 log_f_est, self._cached_res_prop = (
-                    self.log_f_estimator(u, theta))
+                    self.log_f_estimator(us[s], theta))
                 return log_f_est
 
             if self.do_metropolis_update:
-                thetas[s], log_f_est_curr, rejection = mcmc.metropolis_step(
-                    thetas[s-1], log_f_est_curr, log_f_func_2, self.prng,
-                    self.prop_sampler, self.prop_scales)
+                thetas[s], log_f_est_curr, rejection, accept_prob = (
+                    mcmc.metropolis_step(
+                        thetas[s-1], log_f_est_curr, log_f_func_2, self.prng,
+                        self.prop_sampler, self.prop_scales)
+                )
             else:
-                thetas[s], log_f_est_curr, rejection = mcmc.met_hastings_step(
-                    thetas[s-1], log_f_est_curr, log_f_func_2, self.prng,
-                    self.prop_sampler, self.prop_scales, self.log_prop_density)
+                thetas[s], log_f_est_curr, rejection, accept_prob = (
+                    mcmc.met_hastings_step(
+                        thetas[s-1], log_f_est_curr, log_f_func_2, self.prng,
+                        self.prop_sampler, self.prop_scales,
+                        self.log_prop_density)
+                )
+            av_accept += accept_prob
             if rejection:
                 n_reject += 1
             else:
                 # if proposal accepted update current cached results
                 self._cached_res_curr = self._cached_res_prop
-        return thetas, n_reject
+        av_accept /= (n_sample - 1)
+        return thetas, us, {
+            'n_reject': n_reject, 'av_accept': av_accept,
+            'av_accept_adapt': av_accept
+        }
 
 
 class BaseAPMMetIndPlusSliceSampler(object):
@@ -682,32 +751,41 @@ class BaseAPMMetIndPlusSliceSampler(object):
              updates.
         """
         if hasattr(theta_init, 'shape'):
-            thetas = np.empty((n_sample, theta_init.shape[0]))
+            thetas = np.empty((n_sample, theta_init.shape[0])) * np.nan
         else:
-            thetas = np.empty((n_sample, 1))
+            thetas = np.empty((n_sample, 1)) * np.nan
         thetas[0] = theta_init
         u = u_init if u_init is not None else self.u_sampler()
+        us = np.empty((n_sample, u.shape[0])) * np.nan
+        us[0] = u
         log_f_est_curr, self._cached_res_curr = (
-            self.log_f_estimator(u, theta_init))
+            self.log_f_estimator(us[0], theta_init))
         n_reject = 0
+        av_accept = 0.
         for s in range(1, n_sample):
-            ## Update u keeping theta fixed using MI
+            # Update u keeping theta fixed using MI
             # As for this update only u will be changed, cached results
             # for current theta calculated in previous log_f_estimator call
             # can be reused, hence pass these values to estimator (with no
             # theta value being needed in this case) and use only first
             # return value (as second will be equal to cached_res_curr)
-            log_f_func_1 = lambda v: (
-                self.log_f_estimator(v, thetas[s-1], self._cached_res_curr)[0])
-            u, log_f_est_curr, rejection = mcmc.metropolis_indepedence_step(
-                u, log_f_est_curr, log_f_func_1, self.prng, self.u_sampler)
+            def log_f_func_1(v):
+                return self.log_f_estimator(
+                    v, thetas[s-1], self._cached_res_curr)[0]
+            us[s], log_f_est_curr, rejection, accept_prob = (
+                 mcmc.metropolis_indepedence_step(
+                    us[s-1], log_f_est_curr, log_f_func_1, self.prng,
+                    self.u_sampler)
+            )
             if rejection:
                 n_reject += 1
-            ## Update theta given current u using SS
+            av_accept += accept_prob
+            # Update theta given current u using SS
             # self.cached_res_curr also updated in this method
             thetas[s], log_f_est_curr = self.slice_sample_theta_gvn_u(
-                thetas[s-1].copy(), log_f_est_curr, u)
-        return thetas, n_reject
+                thetas[s-1].copy(), log_f_est_curr, us[s])
+        av_accept /= (n_sample - 1)
+        return thetas, us, {'n_reject': n_reject, 'av_accept': av_accept}
 
 
 class BaseAPMEllSSPlusSliceSampler(object):
@@ -808,37 +886,43 @@ class BaseAPMEllSSPlusSliceSampler(object):
             Number of Markov chain updates to perform and so state samples to
             return.
         u_init : ndarray
-            State to initialise random draws at. Optional, if not specified
-            will be sampled from base density.
+            State to initialise auxiliary variables at, shape ``(n_u_dim)``.
+            Optional, if not specified will be sampled from marginal
+            distribution.
 
         Returns
         -------
         thetas : ndarray
-            Two dimensional array of sampled chain states with shape
+            Two dimensional array of sampled target variables with shape
             ``(n_sample, n_dim)``.
+        us : ndarray
+            Two dimensional array of sampled auxiliary variables with shape
+            ``(n_sample, n_u_dim)``.
         """
         if hasattr(theta_init, 'shape'):
-            thetas = np.empty((n_sample, theta_init.shape[0]))
+            thetas = np.empty((n_sample, theta_init.shape[0])) * np.nan
         else:
-            thetas = np.empty((n_sample, 1))
+            thetas = np.empty((n_sample, 1)) * np.nan
         thetas[0] = theta_init
         u = u_init if u_init is not None else self.u_sampler()
+        us = np.empty((n_sample, u.shape[0])) * np.nan
+        us[0] = u
         log_f_est_curr, self._cached_res_curr = (
-            self.log_f_estimator(u, theta_init))
+            self.log_f_estimator(us[0], theta_init))
         for s in range(1, n_sample):
-            ## Update u keeping theta fixed using ell-SS
-            log_f_func = lambda v: (
-                self.log_f_estimator(v, thetas[s-1], self._cached_res_curr)[0]
+            # Update u keeping theta fixed using ell-SS
+            def log_f_func(v):
                 # second output will be equal to cached_res_curr as
                 # not changing theta
-            )
-            u, log_f_est_curr = self.elliptical_slice_sample_u_given_theta(
-                u, log_f_est_curr, log_f_func)
-            ## Update theta given current u using SS
+                return self.log_f_estimator(
+                    v, thetas[s-1], self._cached_res_curr)[0]
+            us[s], log_f_est_curr = self.elliptical_slice_sample_u_given_theta(
+                us[s-1], log_f_est_curr, log_f_func)
+            # Update theta given current u using SS
             # self.cached_res_curr also updated in this method
             thetas[s], log_f_est_curr = self.slice_sample_theta_gvn_u(
-                thetas[s-1].copy(), log_f_est_curr, u)
-        return thetas
+                thetas[s-1].copy(), log_f_est_curr, us[s])
+        return thetas, us
 
 
 class APMMetIndPlusSeqSliceSampler(BaseAPMMetIndPlusSliceSampler):
@@ -857,12 +941,12 @@ class APMMetIndPlusSeqSliceSampler(BaseAPMMetIndPlusSliceSampler):
         ----------
         log_f_estimator : function or callable object
             Function which returns an unbiased estimate of the log density
-            of the target distribution given current parameter state and
-            random draws. Should have a call signature::
+            of the target distribution given current target variables and
+            auxiliary variables. Should have a call signature::
                 log_f_est, cached_res_out =
                     log_f_estimator(u, theta, [, cached_res_in])
             where ``u`` is the vector of auxiliary random draws used in the
-            density estimator, ``theta`` is the state vector (as ndarray) to
+            density estimator, ``theta`` is the target variables to
             estimate the density at, ``cached_res_in`` is an optional input
             which can be provided if cached intermediate results
             deterministically calculated from the ``theta`` which it is wished
@@ -875,8 +959,8 @@ class APMMetIndPlusSeqSliceSampler(BaseAPMMetIndPlusSliceSampler):
             ``theta`` value (if ``cached_res_in`` was specified then
             ``cached_res_out == cached_res_in``).
         u_sampler : function or callable object
-            Function which returns an independent sample from the 'prior'
-            distribution on the random draws :math:`q(u)`.
+            Function which returns an independent sample from the marginal
+            distribution on the auxiliary variables :math:`q(u)`.
         prng : RandomState
             Pseudo-random number generator object (either an instance of a
             ``numpy`` ``RandomState`` or an object with an equivalent
@@ -927,8 +1011,8 @@ class APMMetIndPlusRandDirSliceSampler(BaseAPMMetIndPlusSliceSampler):
     """ Auxiliary pseudo-marginal MI + random-direction-SS sampler.
 
     Sampler in the auxiliary pseudo-marginal MCMC framework which uses
-    Metropolis independence updates for the random draws and slice sampling
-    along a random direction in updates for parameter state.
+    Metropolis independence updates for the auxiliary variables and slice
+    sampling along a random direction in updates for target variables state.
     """
 
     def __init__(self, log_f_estimator, u_sampler, prng, slc_dir_and_w_sampler,
@@ -939,12 +1023,12 @@ class APMMetIndPlusRandDirSliceSampler(BaseAPMMetIndPlusSliceSampler):
         ----------
         log_f_estimator : function or callable object
             Function which returns an unbiased estimate of the log density
-            of the target distribution given current parameter state and
-            random draws. Should have a call signature::
+            of the target distribution given current target variables and
+            auxiliary variables. Should have a call signature::
                 log_f_est, cached_res_out =
                     log_f_estimator(u, theta, [, cached_res_in])
             where ``u`` is the vector of auxiliary random draws used in the
-            density estimator, ``theta`` is the state vector (as ndarray) to
+            density estimator, ``theta`` is the target variables to
             estimate the density at, ``cached_res_in`` is an optional input
             which can be provided if cached intermediate results
             deterministically calculated from the ``theta`` which it is wished
@@ -957,8 +1041,8 @@ class APMMetIndPlusRandDirSliceSampler(BaseAPMMetIndPlusSliceSampler):
             ``theta`` value (if ``cached_res_in`` was specified then
             ``cached_res_out == cached_res_in``).
         u_sampler : function or callable object
-            Function which returns an independent sample from the 'prior'
-            distribution on the random draws :math:`q(u)`.
+            Function which returns an independent sample from the marginal
+            distribution on the auxiliary variables :math:`q(u)`.
         prng : RandomState
             Pseudo-random number generator object (either an instance of a
             ``numpy`` ``RandomState`` or an object with an equivalent
@@ -984,10 +1068,10 @@ class APMMetIndPlusRandDirSliceSampler(BaseAPMMetIndPlusSliceSampler):
         self.slc_dir_and_w_sampler = slc_dir_and_w_sampler
 
     def slice_sample_theta_gvn_u(self, theta, log_f_est, u):
-        """ Perform rd-SS on conditional density of state given random draws.
+        """ Perform rd-SS on conditional of target given auxiliary variables.
 
-        Performs slice sampling along a random direction on conditional target
-        density of parameter state given auxiliary random draw variables.
+        Performs slice sampling along a random direction on conditional
+        density of target variables given auxiliary variables.
         """
         d, w = self.slc_dir_and_w_sampler()
 
@@ -1008,11 +1092,11 @@ class APMEllSSPlusRandDirSliceSampler(BaseAPMEllSSPlusSliceSampler):
     """ Auxiliary pseudo-marginal ESS + random-direction-SS sampler.
 
     Sampler in the auxiliary pseudo-marginal MCMC framework which uses
-    elliptical slice sampling updates for the random draws and slice sampling
-    along a random direction in updates for parameter state.
+    elliptical slice sampling updates for the auxiliary variables and slice
+    sampling along a random direction in updates for target variables.
 
-    It is implicitly assumed the 'prior' :math:`q(u)` on the random draws is
-    Gaussian in this case.
+    It is implicitly assumed the marginal :math:`q(u)` on the auxiliary
+    variables is Gaussian in this case.
     """
 
     def __init__(self, log_f_estimator, u_sampler, prng, slc_dir_and_w_sampler,
@@ -1023,12 +1107,12 @@ class APMEllSSPlusRandDirSliceSampler(BaseAPMEllSSPlusSliceSampler):
         ----------
         log_f_estimator : function or callable object
             Function which returns an unbiased estimate of the log density
-            of the target distribution given current parameter state and
-            random draws. Should have a call signature::
+            of the target distribution given current target variables and
+            auxiliary variables. Should have a call signature::
                 log_f_est, cached_res_out =
                     log_f_estimator(u, theta, [, cached_res_in])
-            where ``u`` is the vector of auxiliary random draws used in the
-            density estimator, ``theta`` is the state vector (as ndarray) to
+            where ``u`` is the vector of auxiliary variables used in the
+            density estimator, ``theta`` is the target variables to
             estimate the density at, ``cached_res_in`` is an optional input
             which can be provided if cached intermediate results
             deterministically calculated from the ``theta`` which it is wished
@@ -1041,8 +1125,8 @@ class APMEllSSPlusRandDirSliceSampler(BaseAPMEllSSPlusSliceSampler):
             ``theta`` value (if ``cached_res_in`` was specified then
             ``cached_res_out == cached_res_in``).
         u_sampler : function or callable object
-            Function which returns an independent sample from the 'prior'
-            distribution on the random draws :math:`q(u)`.
+            Function which returns an independent sample from the marginal
+            distribution on the auxiliary variables :math:`q(u)`.
         prng : RandomState
             Pseudo-random number generator object (either an instance of a
             ``numpy`` ``RandomState`` or an object with an equivalent
@@ -1069,10 +1153,10 @@ class APMEllSSPlusRandDirSliceSampler(BaseAPMEllSSPlusSliceSampler):
         self.slc_dir_and_w_sampler = slc_dir_and_w_sampler
 
     def slice_sample_theta_gvn_u(self, theta, log_f_est, u):
-        """ Perform rd-SS on conditional density of state given random draws.
+        """ Perform rd-SS on conditional of target given auxiliary variables.
 
-        Performs slice sampling along a random direction on conditional target
-        density of parameter state given auxiliary random draw variables.
+        Performs slice sampling along a random direction on conditional
+        density of target variables given auxiliary variables.
         """
         d, w = self.slc_dir_and_w_sampler()
 
@@ -1093,11 +1177,12 @@ class APMEllSSPlusEllSSSampler(BaseAPMEllSSPlusSliceSampler):
     """ Auxiliary pseudo-marginal ESS + ESS sampler.
 
     Sampler in the auxiliary pseudo-marginal MCMC framework which uses
-    elliptical slice sampling updates for both the random draws and parameter
-    states.
+    elliptical slice sampling updates for both the auxiliary variables and
+    target variables.
 
-    It is implicitly assumed the prior :math:`q(u)` on the random draws and
-    the prior on the parameters :math:`p(\\theta)` are both Gaussian.
+    It is implicitly assumed the marginal :math:`q(u)` on the auxiliary
+    variables and the marginal on the parameters :math:`p(\\theta)` are both
+    Gaussian.
     """
 
     def __init__(self, log_f_estimator, u_sampler, theta_sampler, prng,
@@ -1108,13 +1193,13 @@ class APMEllSSPlusEllSSSampler(BaseAPMEllSSPlusSliceSampler):
         ----------
         log_f_estimator : function or callable object
             Function which returns an unbiased estimate of the log density
-            of the target likelihood (i.e. without Gaussian prior on parameter
-            state) given current parameter state and random draws. Should have
+            of the target likelihood (i.e. without Gaussian prior on target
+            variables) given target and auxiliary variables values. Should have
             a call signature::
                 log_f_est, cached_res_out =
                     log_f_estimator(u, theta, [, cached_res_in])
-            where ``u`` is the vector of auxiliary random draws used in the
-            density estimator, ``theta`` is the state vector (as ndarray) to
+            where ``u`` is the vector of auxiliary variables used in the
+            density estimator, ``theta`` is the target variables to
             estimate the density at, ``cached_res_in`` is an optional input
             which can be provided if cached intermediate results
             deterministically calculated from the ``theta`` which it is wished
@@ -1128,10 +1213,10 @@ class APMEllSSPlusEllSSSampler(BaseAPMEllSSPlusSliceSampler):
             ``cached_res_out == cached_res_in``).
         u_sampler : function or callable object
             Function which returns an independent sample from the Gaussian
-            prior distribution on the random draws :math:`q(u)`.
+            marginal distribution on the auxiliary variables :math:`q(u)`.
         theta_sampler : function or callable object
             Function which returns an independent sample from the Gaussian
-            prior distribution on the parameters :math:`p(\\theta)`.
+            marginal distribution on the target variables :math:`p(\\theta)`.
         prng : RandomState
             Pseudo-random number generator object (either an instance of a
             ``numpy`` ``RandomState`` or an object with an equivalent
@@ -1145,10 +1230,10 @@ class APMEllSSPlusEllSSSampler(BaseAPMEllSSPlusSliceSampler):
         self.theta_sampler = theta_sampler
 
     def slice_sample_theta_gvn_u(self, theta, log_f_est, u):
-        """ Perform ESS on conditional density of state given random draws.
+        """ Perform ESS on conditional of target given auxiliary variables.
 
-        Performs elliptical slice sampling on conditional target
-        density of parameter state given auxiliary random draw variables.
+        Performs elliptical slice sampling on conditional density of target
+        variables given auxiliary variables.
         """
 
         def log_f_func(theta):

@@ -2,10 +2,6 @@
 Cython implementations of Gaussian process covariance kernel functions
 """
 
-__authors__ = 'Matt Graham'
-__copyright__ = 'Copyright 2015, Matt Graham'
-__license__ = 'MIT'
-
 from libc.math cimport exp
 
 

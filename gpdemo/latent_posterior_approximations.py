@@ -5,10 +5,6 @@ latent function values :math:`p(f | y, \\theta, X)` in Gaussian process
 classification model with probit likelihood.
 """
 
-__authors__ = 'Matt Graham'
-__copyright__ = 'Copyright 2015, Matt Graham'
-__license__ = 'MIT'
-
 import numpy as np
 import scipy.linalg as la
 from scipy.special import log_ndtr
